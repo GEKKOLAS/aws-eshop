@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
-import { getFunds, getBalance, subscribeToFund, cancelFund, type Fund } from "../services/funds";
+import { getFunds, getBalance, subscribeToFund, cancelFund, type Fund } from "@/services/funds";
 
 export default function Page() {
   const [funds, setFunds] = useState<Fund[] | null>(null);
