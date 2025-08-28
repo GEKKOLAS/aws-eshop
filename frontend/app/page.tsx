@@ -1,10 +1,8 @@
 "use client";
 import { useEffect, useState } from "react";
-
-type Fund = { id: string; name: string; minAmount: number; category?: string };
+import { getFunds, getBalance, subscribeToFund, cancelFund, type Fund } from "../services/funds";
 
 export default function Page() {
-  const base = process.env.NEXT_PUBLIC_API_BASE ?? "https://localhost:7236";
   const [funds, setFunds] = useState<Fund[] | null>(null);
   const [balance, setBalance] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -12,31 +10,19 @@ export default function Page() {
   const [destByFund, setDestByFund] = useState<Record<string, string>>({});
 
   async function refreshData() {
-    const [rf, rb] = await Promise.all([
-      fetch(`${base}/api/funds`, { cache: "no-store" }),
-      fetch(`${base}/api/funds/balance`, { cache: "no-store" })
-    ]);
-    if (!rf.ok || !rb.ok) throw new Error("API respondió con error");
-    setFunds(await rf.json());
-    setBalance(await rb.json());
+  const [f, b] = await Promise.all([getFunds(), getBalance()]);
+  setFunds(f);
+  setBalance(b);
   }
 
   async function subscribe(fundId: string) {
     try {
       setError(null);
-      const notifyChannel = channelByFund[fundId] ?? "email";
-      const notifyDestination = (destByFund[fundId] ?? "").trim();
+  const notifyChannel = channelByFund[fundId] ?? "email";
+  const notifyDestination = (destByFund[fundId] ?? "").trim();
       if (!notifyDestination)
         throw new Error(notifyChannel === "sms" ? "Ingresa un número E.164 (ej: +573001234567)" : "Ingresa un correo válido");
-      const res = await fetch(`${base}/api/funds/subscribe`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fundId, notifyChannel, notifyDestination })
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.message ?? "No se pudo suscribir");
-      }
+  await subscribeToFund(fundId, notifyChannel, notifyDestination);
       await refreshData();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al suscribirse");
@@ -46,15 +32,7 @@ export default function Page() {
   async function cancel(fundId: string) {
     try {
       setError(null);
-      const res = await fetch(`${base}/api/funds/cancel`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fundId })
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body?.message ?? "No se pudo cancelar");
-      }
+  await cancelFund(fundId);
       await refreshData();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al cancelar");
@@ -65,13 +43,7 @@ export default function Page() {
     let mounted = true;
     async function load() {
       try {
-        const [rf, rb] = await Promise.all([
-          fetch(`${base}/api/funds`, { cache: "no-store" }),
-          fetch(`${base}/api/funds/balance`, { cache: "no-store" })
-        ]);
-        if (!rf.ok || !rb.ok) throw new Error("API respondió con error");
-        const f: Fund[] = await rf.json();
-        const b: number = await rb.json();
+        const [f, b] = await Promise.all([getFunds(), getBalance()]);
         if (mounted) {
           setFunds(f);
           setBalance(b);
@@ -84,14 +56,14 @@ export default function Page() {
     return () => {
       mounted = false;
     };
-  }, [base]);
+  }, []);
 
   if (error) {
     return (
       <section>
         <h2 className="text-xl font-semibold">Error al cargar datos</h2>
         <pre className="mt-2 text-sm opacity-80">{error}</pre>
-        <p className="mt-2">Verifica que la API esté corriendo en {base} y recarga la página.</p>
+  <p className="mt-2">Verifica que la API esté corriendo en {process.env.NEXT_PUBLIC_API_BASE ?? "https://localhost:7236"} y recarga la página.</p>
       </section>
     );
   }
