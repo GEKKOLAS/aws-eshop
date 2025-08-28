@@ -1,0 +1,134 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Logs
+*.log
+logs/
+
+# Node / Next.js
+node_modules/
+.next/
+.turbo/
+out/
+dist/
+coverage/
+.cache/
+.vercel/
+*.tsbuildinfo
+
+# Frontend env files
+frontend/.env*
+
+# .NET / Visual Studio
+bin/
+obj/
+Debug/
+Release/
+TestResult*/
+.vs/
+_ReSharper*/
+*.nupkg
+*.snupkg
+
+# Lambda build artifacts
+**/bin/
+**/obj/
+
+# Misc
+*.swp
+*.tmp
+*.bak
+~$*
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# Logs
+*.log
+logs/
+
+# Node / Next.js
+node_modules/
+.next/
+.turbo/
+out/
+dist/
+coverage/
+.cache/
+.vercel/
+*.tsbuildinfo
+
+# Frontend env files
+frontend/.env*
+
+# .NET / Visual Studio
+bin/
+obj/
+Debug/
+Release/
+TestResult*/
+.vs/
+_ReSharper*/
+*.nupkg
+*.snupkg
+
+# Lambda build artifacts
+**/bin/
+**/obj/
+
+# Misc
+*.swp
+*.tmp
+*.bak
+~$*
+# Node/Next.js
+node_modules/
+frontend/node_modules/
+.next/
+frontend/.next/
+.docusaurus/
+dist/
+coverage/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnp.*
+.env*
+
+# VSCode/OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# .NET
+**/bin/
+**/obj/
+*.user
+*.suo
+*.DotSettings.user
+
+# AWS Lambda build artifacts
+**/bin/
+**/obj/
+.aws-sam/
+
+# Misc
+*.swp
