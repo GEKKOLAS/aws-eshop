@@ -1,4 +1,5 @@
-export type Fund = { id: string; name: string; minAmount: number; category?: string };
+import { FundsListSchema, type BalanceDto, type FundDto } from "../dtos/funds";
+export type Fund = FundDto;
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "https://localhost:7236";
 
@@ -26,12 +27,15 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return (await res.json()) as T;
 }
 
-export function getFunds(): Promise<Fund[]> {
-  return request<Fund[]>("/api/funds");
+export async function getFunds(): Promise<Fund[]> {
+  const data = await request<unknown>("/api/funds");
+  return FundsListSchema.parse(data);
 }
 
-export function getBalance(): Promise<number> {
-  return request<number>("/api/funds/balance");
+export async function getBalance(): Promise<number> {
+  const data = await request<BalanceDto>("/api/funds/balance");
+  // Primitive number; trust type here. Optionally, validate with z.number()
+  return data;
 }
 
 export async function subscribeToFund(
