@@ -1,4 +1,4 @@
-import type { FundDto, BalanceDto } from "@/dtos/funds";
+import type { FundDto, BalanceDto, TransactionDto } from "@/dtos/funds";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "https://localhost:7236";
 
@@ -11,8 +11,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     let msg = `API error (${res.status})`;
     try {
-      const body = (await res.json()) as any;
-      if (body?.message) msg = body.message;
+      const body = (await res.json()) as unknown;
+      if (body && typeof body === 'object' && 'message' in body) {
+        const m = (body as Record<string, unknown>).message;
+        if (typeof m === 'string') msg = m;
+      }
     } catch {}
     throw new Error(msg);
   }
@@ -44,4 +47,9 @@ export function cancelFund(fundId: string) {
     method: "POST",
     body: JSON.stringify({ fundId }),
   });
+}
+
+export function getTransactions(count = 10): Promise<TransactionDto[]> {
+  const c = Number.isFinite(count) && count > 0 ? Math.floor(count) : 10;
+  return request<TransactionDto[]>(`/api/funds/transactions?count=${c}`);
 }

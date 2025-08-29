@@ -59,6 +59,9 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
+// Global exception handling
+app.UseMiddleware<API.Middlewares.ExceptionHandlingMiddleware>();
+
 app.UseCors("LocalDev");
 app.UseHttpsRedirection();
 

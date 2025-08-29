@@ -61,6 +61,14 @@ public class FundsService : IFundsService
     public async Task<string> CancelAsync(string fundId)
     {
         var fund = await _funds.GetAsync(fundId) ?? throw new ArgumentException($"Fondo {fundId} no existe");
+
+        // Verify there is an active subscription to cancel (Subscribe count > Cancel count)
+        var recent = await _txRepo.LatestAsync(1000);
+        var net = recent.Where(t => t.FundId == fundId)
+                        .Aggregate(0, (acc, t) => acc + (t.Type == TransactionType.Subscribe ? 1 : -1));
+        if (net <= 0)
+            throw new InvalidOperationException($"No tiene suscripción activa para el fondo {fund.Name}");
+
         _balance += fund.MinAmount; // return linkage value back to client
         var tx = new Transaction
         {
@@ -70,7 +78,7 @@ public class FundsService : IFundsService
             Amount = fund.MinAmount,
             TimestampUtc = DateTime.UtcNow
         };
-    await _txRepo.AddAsync(tx);
+        await _txRepo.AddAsync(tx);
         return tx.Id;
     }
 

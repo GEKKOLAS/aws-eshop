@@ -47,6 +47,10 @@ public class FundsController : ControllerBase
             var id = await _service.CancelAsync(req.FundId);
             return Ok(new { transactionId = id });
         }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
         catch (ArgumentException ex)
         {
             return NotFound(new { message = ex.Message });
