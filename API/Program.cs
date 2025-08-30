@@ -63,7 +63,6 @@ if (app.Environment.IsDevelopment())
 app.UseMiddleware<API.Middlewares.ExceptionHandlingMiddleware>();
 
 app.UseCors("LocalDev");
-app.UseHttpsRedirection();
 
 app.UseAuthorization();
 

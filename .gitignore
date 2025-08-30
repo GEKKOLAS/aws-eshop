@@ -48,6 +48,12 @@ _ReSharper*/
 *.tmp
 *.bak
 ~$*
+
+# Build artifacts and deploy bundles
+publish/
+
+# Sensitive files
+funds-key.pem
 # OS
 .DS_Store
 Thumbs.db

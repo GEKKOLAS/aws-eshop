@@ -60,7 +60,7 @@ export const SideMenu: React.FC<SideMenuProps> = ({ open: controlledOpen, onTogg
         <ul className="flex flex-col gap-1">
           <li>
             <a
-              href="#"
+              href="#home"
               className="flex items-center gap-3 p-2 rounded hover:bg-gray-200/40 dark:hover:bg-white/5 transition-colors"
             >
               <svg className="h-5 w-5 text-gray-600 dark:text-gray-300" viewBox="0 0 24 24" fill="none" aria-hidden>

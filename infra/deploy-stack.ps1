@@ -195,44 +195,24 @@ if ($InstanceType -eq 't3g.micro') {
   $InstanceType = 't3.micro'
 }
 
-$params = @(
-  "ParameterKey=Environment,ParameterValue=$Environment",
-  "ParameterKey=VpcId,ParameterValue=$VpcId",
-  "ParameterKey=SubnetId,ParameterValue=$SubnetId",
-  "ParameterKey=KeyName,ParameterValue=$KeyName",
-  "ParameterKey=InstanceType,ParameterValue=$InstanceType",
-  "ParameterKey=ArtifactBucket,ParameterValue=$ArtifactBucket",
-  "ParameterKey=ArtifactKey,ParameterValue=$ArtifactKey",
-  "ParameterKey=AwsRegion,ParameterValue=$AwsRegion",
-  "ParameterKey=ImageId,ParameterValue=$ImageId",
-  "ParameterKey=TopicEmail,ParameterValue=$TopicEmail"
-)
+$paramOverrides = @()
+$paramOverrides += "Environment=$Environment"
+$paramOverrides += "VpcId=$VpcId"
+$paramOverrides += "SubnetId=$SubnetId"
+if (-not [string]::IsNullOrWhiteSpace($KeyName)) { $paramOverrides += "KeyName=$KeyName" }
+$paramOverrides += "InstanceType=$InstanceType"
+$paramOverrides += "ArtifactBucket=$ArtifactBucket"
+$paramOverrides += "ArtifactKey=$ArtifactKey"
+$paramOverrides += "AwsRegion=$AwsRegion"
+$paramOverrides += "ImageId=$ImageId"
+if (-not [string]::IsNullOrWhiteSpace($TopicEmail)) { $paramOverrides += "TopicEmail=$TopicEmail" }
 
-if ([string]::IsNullOrWhiteSpace($Profile)) {
-  aws cloudformation deploy `
-    --stack-name $StackName `
-    --template-file $template `
-    --region $AwsRegion `
-    --capabilities CAPABILITY_NAMED_IAM `
-    --parameter-overrides $params
-} else {
-  aws cloudformation deploy `
-    --stack-name $StackName `
-    --template-file $template `
-    --region $AwsRegion `
-    --capabilities CAPABILITY_NAMED_IAM `
-    --profile $Profile `
-    --parameter-overrides $params
-}
+$awsArgs = @('cloudformation','deploy','--stack-name',$StackName,'--template-file',$template,'--region',$AwsRegion,'--capabilities','CAPABILITY_NAMED_IAM','--parameter-overrides') + $paramOverrides
+if (-not [string]::IsNullOrWhiteSpace($Profile)) { $awsArgs = @('--profile',$Profile) + $awsArgs }
+Write-Host ("Running: aws " + ($awsArgs -join ' ')) -ForegroundColor DarkGray
+& aws @awsArgs
 
 Write-Host "Stack deployed. Outputs:" -ForegroundColor Green
-if ([string]::IsNullOrWhiteSpace($Profile)) {
-  aws cloudformation describe-stacks --stack-name $StackName `
-    --region $AwsRegion `
-    --query "Stacks[0].Outputs[*].{Key:OutputKey,Value:OutputValue}" --output table
-} else {
-  aws cloudformation describe-stacks --stack-name $StackName `
-    --region $AwsRegion `
-    --profile $Profile `
-    --query "Stacks[0].Outputs[*].{Key:OutputKey,Value:OutputValue}" --output table
-}
+$awsOutArgs = @('cloudformation','describe-stacks','--stack-name',$StackName,'--region',$AwsRegion,'--query','Stacks[0].Outputs[*].{Key:OutputKey,Value:OutputValue}','--output','table')
+if (-not [string]::IsNullOrWhiteSpace($Profile)) { $awsOutArgs = @('--profile',$Profile) + $awsOutArgs }
+& aws @awsOutArgs

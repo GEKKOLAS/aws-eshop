@@ -6,10 +6,10 @@
     "VpcId": { "Type": "AWS::EC2::VPC::Id" },
     "SubnetId": { "Type": "AWS::EC2::Subnet::Id" },
     "KeyName": { "Type": "String", "Default": "" },
-    "InstanceType": { "Type": "String", "Default": "t4g.micro" },
+    "InstanceType": { "Type": "String", "Default": "t4g.small" },
     "ArtifactBucket": { "Type": "String", "Description": "S3 bucket with published API zip" },
     "ArtifactKey": { "Type": "String", "Description": "S3 key (object) for published API zip" },
-    "AwsRegion": { "Type": "String", "Default": "" },
+    "AwsRegion": { "Type": "String", "Default": "us-east-1" },
     "ImageId": { "Type": "String", "Description": "AMI ID for the EC2 instance (e.g., AL2023 x86_64)" },
     "TopicEmail": { "Type": "String", "Default": "", "Description": "Optional email for SNS subscription" }
   },
@@ -71,7 +71,7 @@
               "Statement": [
                 {
                   "Effect": "Allow",
-                  "Action": [ "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:Query" ],
+                  "Action": [ "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:Query", "dynamodb:DescribeTable" ],
                   "Resource": [ { "Fn::GetAtt": [ "TxTable", "Arn" ] }, { "Fn::Sub": "${TxTable.Arn}/index/*" } ]
                 }
               ]
@@ -89,7 +89,8 @@
             "PolicyDocument": {
               "Version": "2012-10-17",
               "Statement": [
-                { "Effect": "Allow", "Action": "s3:GetObject", "Resource": { "Fn::Sub": "arn:aws:s3:::${ArtifactBucket}/${ArtifactKey}" } }
+                { "Effect": "Allow", "Action": "s3:GetObject", "Resource": { "Fn::Sub": "arn:aws:s3:::${ArtifactBucket}/${ArtifactKey}" } },
+                { "Effect": "Allow", "Action": "s3:PutObject", "Resource": { "Fn::Sub": "arn:aws:s3:::${ArtifactBucket}/logs/*" } }
               ]
             }
           }
@@ -126,7 +127,7 @@
         "Tags": [ { "Key": "Name", "Value": { "Fn::Sub": "funds-api-${Environment}" } } ],
         "UserData": {
           "Fn::Base64": {
-            "Fn::Sub": "#!/bin/bash\nset -euxo pipefail\ndnf update -y\nrpm -Uvh https://packages.microsoft.com/config/amazon/2023/packages-microsoft-prod.rpm\ndnf install -y dotnet-runtime-9.0 awscli unzip\nmkdir -p /opt/funds && cd /opt/funds\naws s3 cp s3://${ArtifactBucket}/${ArtifactKey} /opt/funds/app.zip\nunzip -o app.zip -d /opt/funds/app\ncat >/etc/systemd/system/funds-api.service << 'UNIT'\n[Unit]\nDescription=Funds API\nAfter=network.target\n[Service]\nWorkingDirectory=/opt/funds/app\nExecStart=/usr/bin/dotnet /opt/funds/app/API.dll\nRestart=always\nEnvironment=ASPNETCORE_URLS=http://0.0.0.0:80\nEnvironment=ASPNETCORE_ENVIRONMENT=Production\nEnvironment=UseInMemoryTransactions=false\nEnvironment=AWS__Region=${AwsRegion}\nEnvironment=Notifications__Enabled=true\nEnvironment=Notifications__TopicArn=${NotifyTopic}\n[Install]\nWantedBy=multi-user.target\nUNIT\nsystemctl daemon-reload\nsystemctl enable --now funds-api.service\n"
+            "Fn::Sub": "#!/bin/bash\nset -euxo pipefail\nexec > >(tee -a /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1\n\n# Update base OS and tools (best-effort)\ndnf update -y || true\nrpm -Uvh https://packages.microsoft.com/config/amazon/2023/packages-microsoft-prod.rpm || true\ndnf install -y awscli unzip || true\n# Self-contained publish shouldn't need it, but install runtime as fallback\ndnf install -y dotnet-runtime-9.0 || true\n\n# Ensure firewall won't block port 80 (usually off on AL2023, but be safe)\nsystemctl disable --now firewalld || true\n\n# Fetch and unpack application\nmkdir -p /opt/funds\naws s3 cp s3://${ArtifactBucket}/${ArtifactKey} /opt/funds/app.zip\nunzip -o /opt/funds/app.zip -d /opt/funds/app\nif [ -f /opt/funds/app/API ]; then chmod +x /opt/funds/app/API; fi\n\n# Create systemd unit\ncat >/etc/systemd/system/funds-api.service << 'UNIT'\n[Unit]\nDescription=Funds API\nWants=network-online.target\nAfter=network-online.target\n[Service]\nWorkingDirectory=/opt/funds/app\nExecStart=/bin/sh -lc 'if [ -x /opt/funds/app/API ]; then exec /opt/funds/app/API; else exec /usr/bin/dotnet /opt/funds/app/API.dll; fi'\nRestart=always\nEnvironment=ASPNETCORE_URLS=http://0.0.0.0:80\nEnvironment=ASPNETCORE_ENVIRONMENT=Production\nEnvironment=UseInMemoryTransactions=true\nEnvironment=DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1\nEnvironment=AWS__Region=${AwsRegion}\nEnvironment=Notifications__Enabled=true\nEnvironment=Notifications__TopicArn=${NotifyTopic}\nStandardOutput=append:/var/log/funds-api.log\nStandardError=append:/var/log/funds-api.log\n[Install]\nWantedBy=multi-user.target\nUNIT\n\n# Start service and capture status\nsystemctl daemon-reload\nsystemctl enable --now funds-api.service\nsleep 5\nsystemctl --no-pager -l --full status funds-api.service > /var/log/funds-api.status || true\n# extra diagnostics\njournalctl -u funds-api --no-pager -n 200 > /var/log/funds-api.journal 2>&1 || true\nss -ltnp > /var/log/listen-ports.txt 2>&1 || true\n# local health probe\ncurl -sS -m 5 http://localhost:80/api/funds/balance > /var/log/local-curl.txt 2>&1 || true\n# upload logs to s3 for remote debugging\nIID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id || echo unknown)\nLOG_PREFIX=\"s3://${ArtifactBucket}/logs/$IID\"\naws s3 cp /var/log/funds-api.log \"$LOG_PREFIX/funds-api.log\" || true\naws s3 cp /var/log/funds-api.status \"$LOG_PREFIX/funds-api.status\" || true\naws s3 cp /var/log/funds-api.journal \"$LOG_PREFIX/funds-api.journal\" || true\naws s3 cp /var/log/listen-ports.txt \"$LOG_PREFIX/listen-ports.txt\" || true\naws s3 cp /var/log/local-curl.txt \"$LOG_PREFIX/local-curl.txt\" || true\naws s3 cp /var/log/user-data.log \"$LOG_PREFIX/user-data.log\" || true\n"
           }
         }
       }

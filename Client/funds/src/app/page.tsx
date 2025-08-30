@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 
 import { FondSelector } from "@/components/fondSelector";
 import { SideMenu } from "@/components/sideMenu";

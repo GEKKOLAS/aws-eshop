@@ -9,7 +9,7 @@ Write-Host "Publishing API (Release) and uploading to s3://$Bucket/$Key"
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path | Split-Path -Parent
 Push-Location $root
 try {
-  dotnet publish .\API\API.csproj -c Release -o .\publish\api
+  dotnet publish .\API\API.csproj -c Release -o .\publish\api -r linux-x64 --self-contained true -p:PublishSingleFile=true -p:UseAppHost=true
   if (Test-Path .\publish\api.zip) { Remove-Item .\publish\api.zip -Force }
   Compress-Archive -Path .\publish\api\* -DestinationPath .\publish\api.zip -Force
   if ([string]::IsNullOrWhiteSpace($Profile)) {

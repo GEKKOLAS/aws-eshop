@@ -1,0 +1,2 @@
+ARTIFACT_BUCKET=funds-artifacts-165209717137
+ARTIFACT_KEY=artifacts/funds-api.zip

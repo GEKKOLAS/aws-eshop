@@ -63,8 +63,62 @@ if (-not (Test-S3BucketExists -Name $Bucket)) {
 
 $root = Split-Path -Parent $MyInvocation.MyCommand.Path | Split-Path -Parent
 $client = Join-Path $root 'Client\funds'
+
+# If client folder doesn't exist, create a minimal static site as a fallback
+if (-not (Test-Path $client)) {
+  $tmp = Join-Path $env:TEMP ("funds-static-" + [guid]::NewGuid().ToString('N'))
+  New-Item -ItemType Directory -Path $tmp | Out-Null
+  $api = if ([string]::IsNullOrWhiteSpace($ApiBase)) { '#' } else { $ApiBase }
+  $html = @(
+    '<!doctype html>',
+    '<html lang="en">',
+    '<head><meta charset="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/>',
+    '<title>Funds App</title>',
+    '<style>body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:2rem;max-width:820px} code{background:#f2f4f7;padding:.2rem .4rem;border-radius:4px} .muted{color:#667085}</style>',
+    '</head><body>',
+    '<h1>Funds App</h1>',
+    '<p class="muted">Static placeholder UI. Backend is deployed.</p>',
+    "<p>API base: <code>$api</code></p>",
+    "<p>Try: <a href=\"$api/weatherforecast\">$api/weatherforecast</a></p>",
+    '</body></html>'
+  ) -join "`n"
+  Set-Content -Path (Join-Path $tmp 'index.html') -Value $html -Encoding UTF8
+  if ([string]::IsNullOrWhiteSpace($Profile)) {
+    aws s3 sync $tmp s3://$Bucket/ --delete --region $AwsRegion
+  } else {
+    aws s3 sync $tmp s3://$Bucket/ --delete --region $AwsRegion --profile $Profile
+  }
+  Remove-Item -Recurse -Force $tmp
+  Write-Host "Uploaded minimal static site to s3://$Bucket" -ForegroundColor Green
+  # Optional CloudFront invalidation when -StackName provided
+  if (-not [string]::IsNullOrWhiteSpace($StackName)) {
+    $cf = if ([string]::IsNullOrWhiteSpace($Profile)) {
+      aws cloudformation describe-stacks --stack-name $StackName --region $AwsRegion --query "Stacks[0].Outputs[?OutputKey=='FrontendDomainName'].OutputValue" --output text
+    } else {
+      aws cloudformation describe-stacks --stack-name $StackName --region $AwsRegion --profile $Profile --query "Stacks[0].Outputs[?OutputKey=='FrontendDomainName'].OutputValue" --output text
+    }
+    if ($cf) {
+      $distId = if ([string]::IsNullOrWhiteSpace($Profile)) {
+        aws cloudfront list-distributions --region $AwsRegion --query "DistributionList.Items[?DomainName=='$cf'].Id" --output text
+      } else {
+        aws cloudfront list-distributions --region $AwsRegion --profile $Profile --query "DistributionList.Items[?DomainName=='$cf'].Id" --output text
+      }
+      if ($distId) {
+        if ([string]::IsNullOrWhiteSpace($Profile)) {
+          aws cloudfront create-invalidation --distribution-id $distId --paths '/*' --region $AwsRegion | Out-Null
+        } else {
+          aws cloudfront create-invalidation --distribution-id $distId --paths '/*' --region $AwsRegion --profile $Profile | Out-Null
+        }
+        Write-Host "Created CloudFront invalidation for $distId" -ForegroundColor Green
+      }
+    }
+  }
+  return
+}
+
 Push-Location $client
 try {
+
   if (-not [string]::IsNullOrWhiteSpace($ApiBase)) {
     $env:NEXT_PUBLIC_API_BASE = $ApiBase
   }
