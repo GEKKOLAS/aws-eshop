@@ -6,7 +6,7 @@
     "VpcId": { "Type": "AWS::EC2::VPC::Id" },
     "SubnetId": { "Type": "AWS::EC2::Subnet::Id" },
     "KeyName": { "Type": "String", "Default": "" },
-    "InstanceType": { "Type": "String", "Default": "t2.micro" },
+    "InstanceType": { "Type": "String", "Default": "t4g.micro" },
     "ArtifactBucket": { "Type": "String", "Description": "S3 bucket with published API zip" },
     "ArtifactKey": { "Type": "String", "Description": "S3 key (object) for published API zip" },
     "AwsRegion": { "Type": "String", "Default": "us-east-1" },
