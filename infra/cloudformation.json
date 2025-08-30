@@ -9,7 +9,7 @@
     "InstanceType": { "Type": "String", "Default": "t4g.micro" },
     "ArtifactBucket": { "Type": "String", "Description": "S3 bucket with published API zip" },
     "ArtifactKey": { "Type": "String", "Description": "S3 key (object) for published API zip" },
-    "AwsRegion": { "Type": "String", "Default": "us-east-1" },
+    "AwsRegion": { "Type": "String", "Default": "" },
     "ImageId": { "Type": "String", "Description": "AMI ID for the EC2 instance (e.g., AL2023 x86_64)" },
     "TopicEmail": { "Type": "String", "Default": "", "Description": "Optional email for SNS subscription" }
   },

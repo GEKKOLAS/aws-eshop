@@ -10,7 +10,8 @@ param(
   [string]$AwsRegion = 'us-east-1',
   [Parameter(Mandatory=$true)][string]$ImageId,
   [string]$TopicEmail = '',
-  [string]$Profile = ''
+  [string]$Profile = '',
+  [string]$PreferredAz = ''
 )
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
@@ -86,6 +87,21 @@ function Find-PreferredSubnetInVpc {
   return $publicFirst[0].Id
 }
 
+function Find-SubnetInVpcAndAz {
+  param([string]$VpcId, [string]$Az, [string]$Region, [string]$Profile)
+  $query = "Subnets[].{Id:SubnetId,Az:AvailabilityZone,Public:MapPublicIpOnLaunch}"
+  $subnetsJson = if ([string]::IsNullOrWhiteSpace($Profile)) {
+    aws ec2 describe-subnets --filters Name=vpc-id,Values=$VpcId Name=availability-zone,Values=$Az --region $Region --query $query --output json 2>$null
+  } else {
+    aws ec2 describe-subnets --filters Name=vpc-id,Values=$VpcId Name=availability-zone,Values=$Az --region $Region --profile $Profile --query $query --output json 2>$null
+  }
+  if (-not $subnetsJson) { return $null }
+  $subnets = $subnetsJson | ConvertFrom-Json
+  if ($subnets.Count -eq 0) { return $null }
+  $publicFirst = @($subnets | Sort-Object -Property @{Expression = { -not $_.Public }})
+  return $publicFirst[0].Id
+}
+
 Write-Host "Deploying stack $StackName" -ForegroundColor Cyan
 
 # Validate/auto-select free-tier eligible instance type based on AMI architecture
@@ -119,6 +135,21 @@ try {
   # Ensure the chosen type is offered in the subnet's AZ; if not, pick a compatible alternative
   $az = Get-SubnetAz -SubnetId $SubnetId -Region $AwsRegion -Profile $Profile
   if ($az) {
+    # If a PreferredAz is specified and current subnet is in a different AZ, switch to a subnet in PreferredAz
+    if (-not [string]::IsNullOrWhiteSpace($PreferredAz) -and ($PreferredAz -ne $az)) {
+      $vpc = Get-SubnetVpcId -SubnetId $SubnetId -Region $AwsRegion -Profile $Profile
+      if ($vpc) {
+        $targetSubnet = Find-SubnetInVpcAndAz -VpcId $vpc -Az $PreferredAz -Region $AwsRegion -Profile $Profile
+        if ($targetSubnet) {
+          Write-Host "Switching SubnetId from '$SubnetId' (AZ $az) to '$targetSubnet' in PreferredAz '$PreferredAz'." -ForegroundColor Yellow
+          $SubnetId = $targetSubnet
+          $az = $PreferredAz
+        } else {
+          Write-Host "No subnet found in VPC '$vpc' for PreferredAz '$PreferredAz'. Keeping original subnet '$SubnetId' (AZ $az)." -ForegroundColor DarkYellow
+        }
+      }
+    }
+
     if (-not (Is-InstanceTypeOfferedInAz -InstanceType $InstanceType -Az $az -Region $AwsRegion -Profile $Profile)) {
       Write-Host "InstanceType '$InstanceType' not offered in AZ '$az'. Searching alternatives..." -ForegroundColor Yellow
       $candidates = $freeTierTypes | Where-Object { $_ -match 'micro$' }
@@ -137,14 +168,14 @@ try {
       Write-Host "Selected InstanceType '$InstanceType' available in '$az'." -ForegroundColor Yellow
     }
     # Ensure subnet AZ is preferred (a/b/c/d/f). If not, try to switch subnet within the same VPC.
-    if ($az -match 'e$') {
+  if ([string]::IsNullOrWhiteSpace($PreferredAz) -and $az -match 'e$') {
       $vpc = Get-SubnetVpcId -SubnetId $SubnetId -Region $AwsRegion -Profile $Profile
       if ($vpc) {
         $altSubnet = Find-PreferredSubnetInVpc -VpcId $vpc -Region $AwsRegion -Profile $Profile
         if ($altSubnet) {
           Write-Host "Switching SubnetId from '$SubnetId' (AZ $az) to '$altSubnet' in preferred AZ (a/b/c/d/f)." -ForegroundColor Yellow
           $SubnetId = $altSubnet
-        } else {
+    } else {
           Write-Host "No alternate subnet in preferred AZs found within VPC '$vpc'. Proceeding with provided subnet '$SubnetId'." -ForegroundColor DarkYellow
         }
       }
@@ -152,6 +183,16 @@ try {
   }
 } catch {
   Write-Host "Warning: Could not auto-validate Free Tier instance type. Proceeding with '$InstanceType'. Details: $($_.Exception.Message)" -ForegroundColor DarkYellow
+}
+
+# Sanitize common typos
+if ($InstanceType -eq 't4.micro') {
+  Write-Host "Correcting invalid instance type 't4.micro' to 't4g.micro'." -ForegroundColor Yellow
+  $InstanceType = 't4g.micro'
+}
+if ($InstanceType -eq 't3g.micro') {
+  Write-Host "Correcting invalid instance type 't3g.micro' to 't3.micro'." -ForegroundColor Yellow
+  $InstanceType = 't3.micro'
 }
 
 $params = @(
