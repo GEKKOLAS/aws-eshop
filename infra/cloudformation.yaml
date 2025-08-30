@@ -10,11 +10,11 @@ Parameters:
   SubnetId:
     Type: AWS::EC2::Subnet::Id
   KeyName:
-    Type: AWS::EC2::KeyPair::KeyName
+  Type: String
     Default: ''
   InstanceType:
     Type: String
-    Default: t3.micro
+  Default: t2.micro
   ArtifactBucket:
     Type: String
     Description: S3 bucket with published API zip
@@ -41,7 +41,7 @@ Resources:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: Transactions
-  BillingMode: PAY_PER_REQUEST
+      BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: Id
           AttributeType: S
@@ -135,11 +135,12 @@ Resources:
       IamInstanceProfile: !Ref InstanceProfile
       InstanceType: !Ref InstanceType
       KeyName: !If [HasKey, !Ref KeyName, !Ref 'AWS::NoValue']
-  ImageId: !Ref ImageId
+      ImageId: !Ref ImageId
       NetworkInterfaces:
         - DeviceIndex: 0
           SubnetId: !Ref SubnetId
-          GroupSet: [!Ref WebSg]
+          GroupSet:
+            - !Ref WebSg
           AssociatePublicIpAddress: true
       Tags:
         - Key: Name
@@ -201,7 +202,7 @@ Resources:
             Principal:
               CanonicalUser: !GetAtt WebOAI.S3CanonicalUserId
             Action: s3:GetObject
-            Resource: !Sub ${WebBucket.Arn}/*
+            Resource: !Sub '${WebBucket.Arn}/*'
 
   WebDistribution:
     Type: AWS::CloudFront::Distribution

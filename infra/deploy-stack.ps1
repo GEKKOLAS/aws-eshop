@@ -6,7 +6,7 @@ param(
   [Parameter(Mandatory=$true)][string]$ArtifactKey,
   [string]$Environment = 'prod',
   [string]$KeyName = '',
-  [string]$InstanceType = 't3.micro',
+  [string]$InstanceType = 't2.micro',
   [string]$AwsRegion = 'us-east-1',
   [Parameter(Mandatory=$true)][string]$ImageId,
   [string]$TopicEmail = '',
@@ -14,7 +14,8 @@ param(
 )
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$template = Join-Path $here 'cloudformation.yaml'
+$template = Join-Path $here 'cloudformation.json'
+if (-not (Test-Path $template)) { $template = Join-Path $here 'cloudformation.yaml' }
 
 Write-Host "Deploying stack $StackName" -ForegroundColor Cyan
 

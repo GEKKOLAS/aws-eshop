@@ -1,0 +1,201 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Funds platform - EC2 host + DynamoDB Transactions + SNS notifications",
+  "Parameters": {
+    "Environment": { "Type": "String", "Default": "prod" },
+    "VpcId": { "Type": "AWS::EC2::VPC::Id" },
+    "SubnetId": { "Type": "AWS::EC2::Subnet::Id" },
+    "KeyName": { "Type": "String", "Default": "" },
+    "InstanceType": { "Type": "String", "Default": "t2.micro" },
+    "ArtifactBucket": { "Type": "String", "Description": "S3 bucket with published API zip" },
+    "ArtifactKey": { "Type": "String", "Description": "S3 key (object) for published API zip" },
+    "AwsRegion": { "Type": "String", "Default": "us-east-1" },
+    "ImageId": { "Type": "String", "Description": "AMI ID for the EC2 instance (e.g., AL2023 x86_64)" },
+    "TopicEmail": { "Type": "String", "Default": "", "Description": "Optional email for SNS subscription" }
+  },
+  "Conditions": {
+    "HasKey": { "Fn::Not": [ { "Fn::Equals": [ { "Ref": "KeyName" }, "" ] } ] },
+    "HasTopicEmail": { "Fn::Not": [ { "Fn::Equals": [ { "Ref": "TopicEmail" }, "" ] } ] }
+  },
+  "Resources": {
+    "TxTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": "Transactions",
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          { "AttributeName": "Id", "AttributeType": "S" },
+          { "AttributeName": "Gsi1Pk", "AttributeType": "S" },
+          { "AttributeName": "SortTs", "AttributeType": "N" }
+        ],
+        "KeySchema": [ { "AttributeName": "Id", "KeyType": "HASH" } ],
+        "GlobalSecondaryIndexes": [
+          {
+            "IndexName": "GSI1",
+            "KeySchema": [
+              { "AttributeName": "Gsi1Pk", "KeyType": "HASH" },
+              { "AttributeName": "SortTs", "KeyType": "RANGE" }
+            ],
+            "Projection": { "ProjectionType": "ALL" }
+          }
+        ]
+      }
+    },
+    "NotifyTopic": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": { "TopicName": { "Fn::Sub": "funds-notify-${Environment}" } }
+    },
+    "NotifySubscription": {
+      "Type": "AWS::SNS::Subscription",
+      "Condition": "HasTopicEmail",
+      "Properties": {
+        "TopicArn": { "Ref": "NotifyTopic" },
+        "Protocol": "email",
+        "Endpoint": { "Ref": "TopicEmail" }
+      }
+    },
+    "InstanceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            { "Effect": "Allow", "Principal": { "Service": "ec2.amazonaws.com" }, "Action": "sts:AssumeRole" }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "DynamoTxAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [ "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:Query" ],
+                  "Resource": [ { "Fn::GetAtt": [ "TxTable", "Arn" ] }, { "Fn::Sub": "${TxTable.Arn}/index/*" } ]
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "SnsPublish",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [ { "Effect": "Allow", "Action": "sns:Publish", "Resource": { "Ref": "NotifyTopic" } } ]
+            }
+          },
+          {
+            "PolicyName": "S3ReadArtifact",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                { "Effect": "Allow", "Action": "s3:GetObject", "Resource": { "Fn::Sub": "arn:aws:s3:::${ArtifactBucket}/${ArtifactKey}" } }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "InstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": { "Roles": [ { "Ref": "InstanceRole" } ] }
+    },
+    "WebSg": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Allow HTTP",
+        "VpcId": { "Ref": "VpcId" },
+        "SecurityGroupIngress": [ { "IpProtocol": "tcp", "FromPort": 80, "ToPort": 80, "CidrIp": "0.0.0.0/0" } ]
+      }
+    },
+    "AppServer": {
+      "Type": "AWS::EC2::Instance",
+      "Properties": {
+        "IamInstanceProfile": { "Ref": "InstanceProfile" },
+        "InstanceType": { "Ref": "InstanceType" },
+        "KeyName": { "Fn::If": [ "HasKey", { "Ref": "KeyName" }, { "Ref": "AWS::NoValue" } ] },
+        "ImageId": { "Ref": "ImageId" },
+        "NetworkInterfaces": [
+          {
+            "DeviceIndex": 0,
+            "SubnetId": { "Ref": "SubnetId" },
+            "GroupSet": [ { "Ref": "WebSg" } ],
+            "AssociatePublicIpAddress": true
+          }
+        ],
+        "Tags": [ { "Key": "Name", "Value": { "Fn::Sub": "funds-api-${Environment}" } } ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Sub": "#!/bin/bash\nset -euxo pipefail\ndnf update -y\nrpm -Uvh https://packages.microsoft.com/config/amazon/2023/packages-microsoft-prod.rpm\ndnf install -y dotnet-runtime-9.0 awscli unzip\nmkdir -p /opt/funds && cd /opt/funds\naws s3 cp s3://${ArtifactBucket}/${ArtifactKey} /opt/funds/app.zip\nunzip -o app.zip -d /opt/funds/app\ncat >/etc/systemd/system/funds-api.service << 'UNIT'\n[Unit]\nDescription=Funds API\nAfter=network.target\n[Service]\nWorkingDirectory=/opt/funds/app\nExecStart=/usr/bin/dotnet /opt/funds/app/API.dll\nRestart=always\nEnvironment=ASPNETCORE_URLS=http://0.0.0.0:80\nEnvironment=ASPNETCORE_ENVIRONMENT=Production\nEnvironment=UseInMemoryTransactions=false\nEnvironment=AWS__Region=${AwsRegion}\nEnvironment=Notifications__Enabled=true\nEnvironment=Notifications__TopicArn=${NotifyTopic}\n[Install]\nWantedBy=multi-user.target\nUNIT\nsystemctl daemon-reload\nsystemctl enable --now funds-api.service\n"
+          }
+        }
+      }
+    },
+    "WebBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        }
+      }
+    },
+    "WebOAI": {
+      "Type": "AWS::CloudFront::CloudFrontOriginAccessIdentity",
+      "Properties": {
+        "CloudFrontOriginAccessIdentityConfig": { "Comment": { "Fn::Sub": "OAI for ${AWS::StackName} frontend" } }
+      }
+    },
+    "WebBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": { "Ref": "WebBucket" },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Sid": "AllowCloudFrontRead",
+              "Effect": "Allow",
+              "Principal": { "CanonicalUser": { "Fn::GetAtt": [ "WebOAI", "S3CanonicalUserId" ] } },
+              "Action": "s3:GetObject",
+              "Resource": { "Fn::Sub": "${WebBucket.Arn}/*" }
+            }
+          ]
+        }
+      }
+    },
+    "WebDistribution": {
+      "Type": "AWS::CloudFront::Distribution",
+      "Properties": {
+        "DistributionConfig": {
+          "Enabled": true,
+          "PriceClass": "PriceClass_100",
+          "DefaultRootObject": "index.html",
+          "Origins": [
+            {
+              "Id": "web-s3-origin",
+              "DomainName": { "Fn::GetAtt": [ "WebBucket", "RegionalDomainName" ] },
+              "S3OriginConfig": { "OriginAccessIdentity": { "Fn::Sub": "origin-access-identity/cloudfront/${WebOAI}" } }
+            }
+          ],
+          "DefaultCacheBehavior": {
+            "TargetOriginId": "web-s3-origin",
+            "ViewerProtocolPolicy": "redirect-to-https",
+            "AllowedMethods": [ "GET", "HEAD" ],
+            "Compress": true,
+            "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
+            "ResponseHeadersPolicyId": "eaab4381-ed33-4a86-88ca-d9558dc6cd63"
+          }
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "PublicURL": { "Description": "Public URL (HTTP)", "Value": { "Fn::Sub": "http://${AppServer.PublicDnsName}" } },
+    "SnsTopicArn": { "Description": "SNS Topic ARN", "Value": { "Ref": "NotifyTopic" } },
+    "FrontendBucketName": { "Description": "S3 bucket for static frontend assets", "Value": { "Ref": "WebBucket" } },
+    "FrontendDomainName": { "Description": "CloudFront domain for the frontend", "Value": { "Fn::GetAtt": [ "WebDistribution", "DomainName" ] } }
+  }
+}
