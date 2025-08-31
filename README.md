@@ -82,12 +82,8 @@
 
 ---
 
-#### Notas operativas rápidas
-- Usar `TransactWriteItems` para operaciones que tocan saldo + suscripción + historial para garantizar consistencia.  
-- Usar `ConditionExpression`/`ConditionCheck` para evitar races (ej. doble suscripción).  
-- Diseñar `SK` de transacciones para permitir ordenamiento eficiente (timestamp invertido si quieres orden descendente por defecto).  
+<img width="1835" height="560" alt="FundsApp_Model" src="https://github.com/user-attachments/assets/35300cf9-4f5e-404e-bca9-c6ec7f0708fd" /> 
 
-Este bloque puede pegarse en $SELECTION_PLACEHOLDER$ para una vista clara y usable del modelado y accesos en DynamoDB.
 
 #### Respuesta de la query SQL consultas devuelven los clientes cuyos productos inscritos están disponibles únicamente en las sucursales que ellos visitan.
 
@@ -99,6 +95,7 @@ LEFT JOIN visitan v
   ON v.idSucursal = d.idSucursal AND v.idCliente = c.id
 GROUP BY c.id, c.nombre, c.apellidos
 HAVING COUNT(*) = COUNT(v.idSucursal);  -- ninguna sucursal ofertante queda sin ser visitada
+
 
 
 
