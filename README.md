@@ -1,6 +1,7 @@
 ## Vista previa en vivo
 
 -live preview : https://dvsvnp7nbzde3.cloudfront.net/
+-el email notification service puede no estar funcionando debido a que Amazon SES esta en sandbox mode solo se envian mensajes a los correos verificados en mi cuenta
 
 ## Preguntas query y modelado de DB en dynamo
 - DynamoDb table : 
