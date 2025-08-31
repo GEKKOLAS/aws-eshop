@@ -23,4 +23,13 @@ public class InMemoryTransactionRepository : ITransactionRepository
 
         return Task.FromResult((IReadOnlyList<Transaction>)list);
     }
+
+    public Task<IReadOnlyList<Transaction>> GetAllAsync()
+    {
+        var list = _items
+            .OrderBy(t => t.TimestampUtc)
+            .ToList()
+            .AsReadOnly();
+        return Task.FromResult((IReadOnlyList<Transaction>)list);
+    }
 }

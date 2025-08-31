@@ -6,18 +6,41 @@
     "VpcId": { "Type": "AWS::EC2::VPC::Id" },
     "SubnetId": { "Type": "AWS::EC2::Subnet::Id" },
     "KeyName": { "Type": "String", "Default": "" },
-    "InstanceType": { "Type": "String", "Default": "t4g.small" },
+    "InstanceType": { "Type": "String", "Default": "t3.small", "Description": "EC2 instance type (x86_64 recommended for linux-x64 publish)" },
     "ArtifactBucket": { "Type": "String", "Description": "S3 bucket with published API zip" },
     "ArtifactKey": { "Type": "String", "Description": "S3 key (object) for published API zip" },
     "AwsRegion": { "Type": "String", "Default": "us-east-1" },
-    "ImageId": { "Type": "String", "Description": "AMI ID for the EC2 instance (e.g., AL2023 x86_64)" },
-    "TopicEmail": { "Type": "String", "Default": "", "Description": "Optional email for SNS subscription" }
+    "ImageId": {
+      "Type": "String",
+      "Default": "",
+      "Description": "Optional explicit AMI ID (e.g., ami-0...). If empty, uses latest AL2023 x86_64 via SSM."
+    },
+  "LatestAl2023Ami": {
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+      "Default": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64",
+      "Description": "SSM parameter for the latest Amazon Linux 2023 x86_64 AMI"
+    },
+  "TopicEmail": { "Type": "String", "Default": "", "Description": "Optional email for SNS subscription" },
+  "NotificationsProvider": { "Type": "String", "Default": "ses", "AllowedValues": ["sns", "ses"], "Description": "Notification provider used by the API (sns or ses)" },
+  "FromEmail": { "Type": "String", "Default": "", "Description": "Verified SES email address used as the From/Sender when using SES" }
   },
   "Conditions": {
     "HasKey": { "Fn::Not": [ { "Fn::Equals": [ { "Ref": "KeyName" }, "" ] } ] },
-    "HasTopicEmail": { "Fn::Not": [ { "Fn::Equals": [ { "Ref": "TopicEmail" }, "" ] } ] }
+  "HasTopicEmail": { "Fn::Not": [ { "Fn::Equals": [ { "Ref": "TopicEmail" }, "" ] } ] },
+  "HasImageId": { "Fn::Not": [ { "Fn::Equals": [ { "Ref": "ImageId" }, "" ] } ] }
   },
   "Resources": {
+    "FundsTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": "Funds",
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          { "AttributeName": "Id", "AttributeType": "S" }
+        ],
+        "KeySchema": [ { "AttributeName": "Id", "KeyType": "HASH" } ]
+      }
+    },
     "TxTable": {
       "Type": "AWS::DynamoDB::Table",
       "Properties": {
@@ -63,16 +86,32 @@
             { "Effect": "Allow", "Principal": { "Service": "ec2.amazonaws.com" }, "Action": "sts:AssumeRole" }
           ]
         },
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+        ],
         "Policies": [
-          {
+    {
             "PolicyName": "DynamoTxAccess",
             "PolicyDocument": {
               "Version": "2012-10-17",
               "Statement": [
                 {
                   "Effect": "Allow",
-                  "Action": [ "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:Query", "dynamodb:DescribeTable" ],
+                  "Action": [ "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:GetItem", "dynamodb:Query", "dynamodb:Scan", "dynamodb:DescribeTable" ],
                   "Resource": [ { "Fn::GetAtt": [ "TxTable", "Arn" ] }, { "Fn::Sub": "${TxTable.Arn}/index/*" } ]
+                }
+              ]
+            }
+          },
+          {
+            "PolicyName": "DynamoFundsAccess",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [ "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Scan", "dynamodb:DescribeTable" ],
+      "Resource": { "Fn::Sub": "arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/Funds" }
                 }
               ]
             }
@@ -81,7 +120,19 @@
             "PolicyName": "SnsPublish",
             "PolicyDocument": {
               "Version": "2012-10-17",
-              "Statement": [ { "Effect": "Allow", "Action": "sns:Publish", "Resource": { "Ref": "NotifyTopic" } } ]
+              "Statement": [
+                { "Effect": "Allow", "Action": ["sns:Publish","sns:ListSubscriptionsByTopic","sns:Subscribe","sns:SetSubscriptionAttributes"], "Resource": { "Ref": "NotifyTopic" } },
+                { "Effect": "Allow", "Action": "sns:Publish", "Resource": "*" }
+              ]
+            }
+          },
+          {
+            "PolicyName": "SesSendEmail",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                { "Effect": "Allow", "Action": ["ses:SendEmail","ses:SendRawEmail"], "Resource": "*" }
+              ]
             }
           },
           {
@@ -115,7 +166,13 @@
         "IamInstanceProfile": { "Ref": "InstanceProfile" },
         "InstanceType": { "Ref": "InstanceType" },
         "KeyName": { "Fn::If": [ "HasKey", { "Ref": "KeyName" }, { "Ref": "AWS::NoValue" } ] },
-        "ImageId": { "Ref": "ImageId" },
+  "ImageId": { 
+          "Fn::If": [
+            "HasImageId",
+            { "Ref": "ImageId" },
+            { "Ref": "LatestAl2023Ami" }
+          ]
+        },
         "NetworkInterfaces": [
           {
             "DeviceIndex": 0,
@@ -127,7 +184,7 @@
         "Tags": [ { "Key": "Name", "Value": { "Fn::Sub": "funds-api-${Environment}" } } ],
         "UserData": {
           "Fn::Base64": {
-            "Fn::Sub": "#!/bin/bash\nset -euxo pipefail\nexec > >(tee -a /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1\n\n# Update base OS and tools (best-effort)\ndnf update -y || true\nrpm -Uvh https://packages.microsoft.com/config/amazon/2023/packages-microsoft-prod.rpm || true\ndnf install -y awscli unzip || true\n# Self-contained publish shouldn't need it, but install runtime as fallback\ndnf install -y dotnet-runtime-9.0 || true\n\n# Ensure firewall won't block port 80 (usually off on AL2023, but be safe)\nsystemctl disable --now firewalld || true\n\n# Fetch and unpack application\nmkdir -p /opt/funds\naws s3 cp s3://${ArtifactBucket}/${ArtifactKey} /opt/funds/app.zip\nunzip -o /opt/funds/app.zip -d /opt/funds/app\nif [ -f /opt/funds/app/API ]; then chmod +x /opt/funds/app/API; fi\n\n# Create systemd unit\ncat >/etc/systemd/system/funds-api.service << 'UNIT'\n[Unit]\nDescription=Funds API\nWants=network-online.target\nAfter=network-online.target\n[Service]\nWorkingDirectory=/opt/funds/app\nExecStart=/bin/sh -lc 'if [ -x /opt/funds/app/API ]; then exec /opt/funds/app/API; else exec /usr/bin/dotnet /opt/funds/app/API.dll; fi'\nRestart=always\nEnvironment=ASPNETCORE_URLS=http://0.0.0.0:80\nEnvironment=ASPNETCORE_ENVIRONMENT=Production\nEnvironment=UseInMemoryTransactions=true\nEnvironment=DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1\nEnvironment=AWS__Region=${AwsRegion}\nEnvironment=Notifications__Enabled=true\nEnvironment=Notifications__TopicArn=${NotifyTopic}\nStandardOutput=append:/var/log/funds-api.log\nStandardError=append:/var/log/funds-api.log\n[Install]\nWantedBy=multi-user.target\nUNIT\n\n# Start service and capture status\nsystemctl daemon-reload\nsystemctl enable --now funds-api.service\nsleep 5\nsystemctl --no-pager -l --full status funds-api.service > /var/log/funds-api.status || true\n# extra diagnostics\njournalctl -u funds-api --no-pager -n 200 > /var/log/funds-api.journal 2>&1 || true\nss -ltnp > /var/log/listen-ports.txt 2>&1 || true\n# local health probe\ncurl -sS -m 5 http://localhost:80/api/funds/balance > /var/log/local-curl.txt 2>&1 || true\n# upload logs to s3 for remote debugging\nIID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id || echo unknown)\nLOG_PREFIX=\"s3://${ArtifactBucket}/logs/$IID\"\naws s3 cp /var/log/funds-api.log \"$LOG_PREFIX/funds-api.log\" || true\naws s3 cp /var/log/funds-api.status \"$LOG_PREFIX/funds-api.status\" || true\naws s3 cp /var/log/funds-api.journal \"$LOG_PREFIX/funds-api.journal\" || true\naws s3 cp /var/log/listen-ports.txt \"$LOG_PREFIX/listen-ports.txt\" || true\naws s3 cp /var/log/local-curl.txt \"$LOG_PREFIX/local-curl.txt\" || true\naws s3 cp /var/log/user-data.log \"$LOG_PREFIX/user-data.log\" || true\n"
+            "Fn::Sub": "#!/bin/bash\nset -euxo pipefail\nexec > >(tee -a /var/log/user-data.log | logger -t user-data -s 2>/dev/console) 2>&1\n\n# Update base OS and tools (best-effort)\ndnf update -y || true\nrpm -Uvh https://packages.microsoft.com/config/amazon/2023/packages-microsoft-prod.rpm || true\ndnf install -y awscli unzip || true\n# Self-contained publish shouldn't need it, but install runtime as fallback\ndnf install -y dotnet-runtime-9.0 || true\n\n# Ensure firewall won't block port 80 (usually off on AL2023, but be safe)\nsystemctl disable --now firewalld || true\n\n# Ensure SSM agent is running for Session Manager access\nsystemctl enable --now amazon-ssm-agent || true\n\n# Fetch and unpack application\nmkdir -p /opt/funds\naws s3 cp s3://${ArtifactBucket}/${ArtifactKey} /opt/funds/app.zip\nunzip -o /opt/funds/app.zip -d /opt/funds/app\nif [ -f /opt/funds/app/API ]; then chmod +x /opt/funds/app/API; fi\n\n# Create systemd unit\ncat >/etc/systemd/system/funds-api.service << 'UNIT'\n[Unit]\nDescription=Funds API\nWants=network-online.target\nAfter=network-online.target\n[Service]\nWorkingDirectory=/opt/funds/app\nExecStart=/bin/sh -lc 'if [ -x /opt/funds/app/API ]; then exec /opt/funds/app/API; else exec /usr/bin/dotnet /opt/funds/app/API.dll; fi'\nRestart=always\nEnvironment=ASPNETCORE_URLS=http://0.0.0.0:80\nEnvironment=ASPNETCORE_ENVIRONMENT=Production\nEnvironment=UseInMemoryTransactions=false\nEnvironment=DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1\nEnvironment=AWS__Region=${AwsRegion}\nEnvironment=Notifications__Enabled=true\nEnvironment=Notifications__TopicArn=${NotifyTopic}\nEnvironment=Notifications__Provider=${NotificationsProvider}\nEnvironment=Notifications__FromEmail=${FromEmail}\nStandardOutput=append:/var/log/funds-api.log\nStandardError=append:/var/log/funds-api.log\n[Install]\nWantedBy=multi-user.target\nUNIT\n\n# Start service and capture status\nsystemctl daemon-reload\nsystemctl enable --now funds-api.service\nsleep 5\nsystemctl --no-pager -l --full status funds-api.service > /var/log/funds-api.status || true\n# extra diagnostics\njournalctl -u funds-api --no-pager -n 200 > /var/log/funds-api.journal 2>&1 || true\nss -ltnp > /var/log/listen-ports.txt 2>&1 || true\n# local health probe\ncurl -sS -m 5 http://localhost:80/api/funds/balance > /var/log/local-curl.txt 2>&1 || true\n# upload logs to s3 for remote debugging\nIID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id || echo unknown)\nLOG_PREFIX=\"s3://${ArtifactBucket}/logs/$IID\"\naws s3 cp /var/log/funds-api.log \"$LOG_PREFIX/funds-api.log\" || true\naws s3 cp /var/log/funds-api.status \"$LOG_PREFIX/funds-api.status\" || true\naws s3 cp /var/log/funds-api.journal \"$LOG_PREFIX/funds-api.journal\" || true\naws s3 cp /var/log/listen-ports.txt \"$LOG_PREFIX/listen-ports.txt\" || true\naws s3 cp /var/log/local-curl.txt \"$LOG_PREFIX/local-curl.txt\" || true\naws s3 cp /var/log/user-data.log \"$LOG_PREFIX/user-data.log\" || true\n"
           }
         }
       }
@@ -179,6 +236,11 @@
               "Id": "web-s3-origin",
               "DomainName": { "Fn::GetAtt": [ "WebBucket", "RegionalDomainName" ] },
               "S3OriginConfig": { "OriginAccessIdentity": { "Fn::Sub": "origin-access-identity/cloudfront/${WebOAI}" } }
+            },
+            {
+              "Id": "api-ec2-origin",
+              "DomainName": { "Fn::GetAtt": [ "AppServer", "PublicDnsName" ] },
+              "CustomOriginConfig": { "HTTPPort": 80, "OriginProtocolPolicy": "http-only" }
             }
           ],
           "DefaultCacheBehavior": {
@@ -188,7 +250,18 @@
             "Compress": true,
             "CachePolicyId": "658327ea-f89d-4fab-a63d-7e88639e58f6",
             "ResponseHeadersPolicyId": "eaab4381-ed33-4a86-88ca-d9558dc6cd63"
-          }
+          },
+      "CacheBehaviors": [
+            {
+        "PathPattern": "/api/*",
+              "TargetOriginId": "api-ec2-origin",
+              "ViewerProtocolPolicy": "redirect-to-https",
+              "AllowedMethods": [ "GET", "HEAD", "OPTIONS", "PUT", "PATCH", "POST", "DELETE" ],
+              "Compress": true,
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "OriginRequestPolicyId": "88a5eaf4-2fd4-4709-b370-b4c650ea3fcf"
+            }
+          ]
         }
       }
     }

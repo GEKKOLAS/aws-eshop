@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Funds App</title>
+    <style>
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; margin: 2rem; }
+      code { background: #f2f4f7; padding: .2rem .4rem; border-radius: 4px; }
+      .muted { color: #667085; }
+    </style>
+  </head>
+  <body>
+    <h1>Funds App</h1>
+    <p class="muted">Sitio estático exportado. Si la app Next no carga, esta página asegura index.html presente.</p>
+    <p>API base: <code id="api"></code></p>
+    <script>
+      document.getElementById('api').textContent = (typeof window !== 'undefined' ? (window.NEXT_PUBLIC_API_BASE || '') : '') || 'no definido';
+    </script>
+  </body>
+</html>

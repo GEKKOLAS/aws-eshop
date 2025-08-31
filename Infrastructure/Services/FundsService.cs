@@ -1,4 +1,5 @@
 using Core.Entities;
+using Microsoft.Extensions.Configuration;
 using Infrastructure.Repositories;
 
 namespace Infrastructure.Services;
@@ -22,26 +23,35 @@ public class FundsService : IFundsService
     private readonly IFundRepository _funds;
     private readonly ITransactionRepository _txRepo;
     private readonly INotificationSender? _notifier;
-    private decimal _balance = 500_000m; // initial balance per spec
+    private readonly decimal _initialBalance;
 
-    public FundsService(IFundRepository funds, ITransactionRepository txRepo, INotificationSender? notifier = null)
+    public FundsService(IFundRepository funds, ITransactionRepository txRepo, INotificationSender? notifier = null, IConfiguration? config = null)
     {
         _funds = funds;
         _txRepo = txRepo;
         _notifier = notifier;
+        if (config != null && decimal.TryParse(config["InitialBalance"], out var init))
+            _initialBalance = init;
+        else
+            _initialBalance = 500_000m;
     }
 
-    public Task<decimal> GetBalanceAsync() => Task.FromResult(_balance);
+    public async Task<decimal> GetBalanceAsync()
+    {
+        var txs = await _txRepo.GetAllAsync();
+        var delta = txs.Sum(t => t.Type == TransactionType.Subscribe ? -t.Amount : t.Amount);
+        return _initialBalance + delta;
+    }
 
     public Task<IEnumerable<Fund>> ListFundsAsync() => _funds.ListAsync();
 
     public async Task<string> SubscribeAsync(string fundId, string? notifyChannel = null, string? notifyDestination = null)
     {
-        var fund = await _funds.GetAsync(fundId) ?? throw new ArgumentException($"Fondo {fundId} no existe");
-        if (_balance < fund.MinAmount)
+    var fund = await _funds.GetAsync(fundId) ?? throw new ArgumentException($"Fondo {fundId} no existe");
+    var currentBalance = await GetBalanceAsync();
+    if (currentBalance < fund.MinAmount)
             throw new InvalidOperationException($"No tiene saldo disponible para vincularse al fondo {fund.Name}");
 
-        _balance -= fund.MinAmount;
         var tx = new Transaction
         {
             Id = Guid.NewGuid().ToString("N"),
@@ -69,7 +79,6 @@ public class FundsService : IFundsService
         if (net <= 0)
             throw new InvalidOperationException($"No tiene suscripción activa para el fondo {fund.Name}");
 
-        _balance += fund.MinAmount; // return linkage value back to client
         var tx = new Transaction
         {
             Id = Guid.NewGuid().ToString("N"),

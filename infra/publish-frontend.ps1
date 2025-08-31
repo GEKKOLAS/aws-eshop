@@ -32,14 +32,7 @@ if ([string]::IsNullOrWhiteSpace($Bucket) -and -not [string]::IsNullOrWhiteSpace
   }
 }
 
-if ([string]::IsNullOrWhiteSpace($ApiBase) -and -not [string]::IsNullOrWhiteSpace($StackName)) {
-  $apiQuery = "Stacks[0].Outputs[?OutputKey=='PublicURL'].OutputValue | [0]"
-  if ([string]::IsNullOrWhiteSpace($Profile)) {
-    $ApiBase = aws cloudformation describe-stacks --stack-name $StackName --region $AwsRegion --query $apiQuery --output text 2>$null
-  } else {
-    $ApiBase = aws cloudformation describe-stacks --stack-name $StackName --region $AwsRegion --profile $Profile --query $apiQuery --output text 2>$null
-  }
-}
+# Do NOT auto-resolve ApiBase; by default we want relative paths so CloudFront proxies /api/* without mixed-content.
 
 if ([string]::IsNullOrWhiteSpace($Bucket)) {
   throw "Bucket is required. Pass -Bucket <name> or set environment variable FrontendBucket."
@@ -69,6 +62,7 @@ if (-not (Test-Path $client)) {
   $tmp = Join-Path $env:TEMP ("funds-static-" + [guid]::NewGuid().ToString('N'))
   New-Item -ItemType Directory -Path $tmp | Out-Null
   $api = if ([string]::IsNullOrWhiteSpace($ApiBase)) { '#' } else { $ApiBase }
+  $link = if ($api -eq '#') { '#' } else { "$api/weatherforecast" }
   $html = @(
     '<!doctype html>',
     '<html lang="en">',
@@ -78,8 +72,8 @@ if (-not (Test-Path $client)) {
     '</head><body>',
     '<h1>Funds App</h1>',
     '<p class="muted">Static placeholder UI. Backend is deployed.</p>',
-    "<p>API base: <code>$api</code></p>",
-    "<p>Try: <a href=\"$api/weatherforecast\">$api/weatherforecast</a></p>",
+    ('<p>API base: <code>' + $api + '</code></p>'),
+    ('<p>Try: <a href="' + $link + '">' + $link + '</a></p>'),
     '</body></html>'
   ) -join "`n"
   Set-Content -Path (Join-Path $tmp 'index.html') -Value $html -Encoding UTF8
@@ -123,29 +117,26 @@ try {
     $env:NEXT_PUBLIC_API_BASE = $ApiBase
   }
   # Resilient install to avoid EPERM locks on Windows
-  $installed = $false
-  for ($i=1; $i -le 3 -and -not $installed; $i++) {
-    try {
-      npm ci
-      $installed = $true
-    } catch {
-      Start-Sleep -Seconds (2 * $i)
-      if ($i -eq 3) { throw }
+  if (Test-Path (Join-Path $client 'node_modules')) {
+    Write-Host "node_modules exists; skipping npm install" -ForegroundColor Yellow
+  } else {
+    $installed = $false
+    for ($i=1; $i -le 2 -and -not $installed; $i++) {
+      try {
+        npm ci
+        $installed = $true
+      } catch {
+        Start-Sleep -Seconds (2 * $i)
+      }
+    }
+    if (-not $installed) {
+      Write-Warning "npm ci failed; falling back to 'npm install'"
+      npm install --no-audit --no-fund
     }
   }
+  # Build (with output: 'export' configured in next.config.ts, this writes to 'out')
   npx --yes next@15.5.2 build
-  # Next 15 default output is .next, use standalone export only if configured; we'll sync .next/static as assets and a simple index.html if exported
-  # Prefer a static export (app router supports output: 'export' if configured). If no export, we'll package minimal static assets.
-  $outDir = Join-Path $client '.next\standalone'
-  $staticDir = Join-Path $client '.next\static'
-  if (Test-Path $staticDir) {
-    if ([string]::IsNullOrWhiteSpace($Profile)) {
-      aws s3 sync $staticDir s3://$Bucket/_next/static --delete --region $AwsRegion
-    } else {
-      aws s3 sync $staticDir s3://$Bucket/_next/static --delete --region $AwsRegion --profile $Profile
-    }
-  }
-  # If there is an export (out/), prefer uploading it
+  # If there is an export (out/), prefer uploading it (contains index.html and assets)
   $exportDir = Join-Path $client 'out'
   if (Test-Path $exportDir) {
     if ([string]::IsNullOrWhiteSpace($Profile)) {
@@ -153,8 +144,31 @@ try {
     } else {
       aws s3 sync $exportDir s3://$Bucket/ --delete --region $AwsRegion --profile $Profile
     }
+    # Invalidate CloudFront when StackName provided
+    if (-not [string]::IsNullOrWhiteSpace($StackName)) {
+      $cf = if ([string]::IsNullOrWhiteSpace($Profile)) {
+        aws cloudformation describe-stacks --stack-name $StackName --region $AwsRegion --query "Stacks[0].Outputs[?OutputKey=='FrontendDomainName'].OutputValue" --output text
+      } else {
+        aws cloudformation describe-stacks --stack-name $StackName --region $AwsRegion --profile $Profile --query "Stacks[0].Outputs[?OutputKey=='FrontendDomainName'].OutputValue" --output text
+      }
+      if ($cf) {
+        $distId = if ([string]::IsNullOrWhiteSpace($Profile)) {
+          aws cloudfront list-distributions --region $AwsRegion --query "DistributionList.Items[?DomainName=='$cf'].Id" --output text
+        } else {
+          aws cloudfront list-distributions --region $AwsRegion --profile $Profile --query "DistributionList.Items[?DomainName=='$cf'].Id" --output text
+        }
+        if ($distId) {
+          if ([string]::IsNullOrWhiteSpace($Profile)) {
+            aws cloudfront create-invalidation --distribution-id $distId --paths '/*' --region $AwsRegion | Out-Null
+          } else {
+            aws cloudfront create-invalidation --distribution-id $distId --paths '/*' --region $AwsRegion --profile $Profile | Out-Null
+          }
+          Write-Host "Created CloudFront invalidation for $distId" -ForegroundColor Green
+        }
+      }
+    }
   } else {
-    # Fallback: upload a minimal index.html pointing to the app root hosted elsewhere or placeholder
+    # Fallback: upload a minimal index.html to avoid AccessDenied at CloudFront root
     $indexPath = Join-Path $client 'index.html'
   $indexHtml = "<!doctype html><html><head><meta http-equiv='refresh' content='0; url=/' /><title>Redirecting…</title></head><body></body></html>"
   Set-Content -Path $indexPath -Value $indexHtml -Encoding UTF8

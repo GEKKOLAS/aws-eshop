@@ -6,7 +6,10 @@ param(
   [string]$ArtifactKey = 'artifacts/funds-api.zip',
   [string]$InstanceType = 't3.micro',
   [string]$TopicEmail = '',
-  [string]$SubnetId = ''
+  [string]$SubnetId = '',
+  [string]$VpcId = '',
+  [string]$NotificationsProvider = 'ses',
+  [string]$FromEmail = ''
 )
 
 $profileArgs = @()
@@ -61,22 +64,37 @@ if (-not $bucketExists) {
 # Determine VPC and subnet
 if (-not [string]::IsNullOrWhiteSpace($SubnetId)) {
   Write-Host "Using provided SubnetId: $SubnetId" -ForegroundColor Yellow
-  $vpcId = (& aws @profileArgs 'ec2' 'describe-subnets' '--subnet-ids' $SubnetId '--region' $AwsRegion '--query' 'Subnets[0].VpcId' '--output' 'text')
-  $vpcId = (($vpcId | Out-String).Trim())
-  if (-not $vpcId -or $vpcId -eq 'None') { throw "Could not resolve VPC for SubnetId $SubnetId." }
+  if ([string]::IsNullOrWhiteSpace($VpcId)) {
+    $vpcId = (& aws @profileArgs 'ec2' 'describe-subnets' '--subnet-ids' $SubnetId '--region' $AwsRegion '--query' 'Subnets[0].VpcId' '--output' 'text')
+    $vpcId = (($vpcId | Out-String).Trim())
+    if (-not $vpcId -or $vpcId -eq 'None') { throw "Could not resolve VPC for SubnetId $SubnetId." }
+  } else {
+    $vpcId = $VpcId
+  }
   $subnetId = $SubnetId
 } else {
-  Write-Host "Discovering default VPC and a public subnet..." -ForegroundColor Cyan
-  $vpcId = (& aws @profileArgs 'ec2' 'describe-vpcs' '--filters' 'Name=isDefault,Values=true' '--region' $AwsRegion '--query' 'Vpcs[0].VpcId' '--output' 'text')
-  $vpcId = (($vpcId | Out-String).Trim())
-  if (-not $vpcId -or $vpcId -eq 'None') { throw "No default VPC found in $AwsRegion. Provide explicit VPC/Subnet or create a VPC." }
+  if (-not [string]::IsNullOrWhiteSpace($VpcId)) {
+    Write-Host "Using provided VPC: $VpcId; selecting a subnet in this VPC..." -ForegroundColor Yellow
+    $subnetsJson = & aws @profileArgs 'ec2' 'describe-subnets' '--filters' "Name=vpc-id,Values=$VpcId" '--region' $AwsRegion '--query' "Subnets[].{Id:SubnetId,Public:MapPublicIpOnLaunch}" '--output' 'json'
+    $subnets = $subnetsJson | ConvertFrom-Json
+    if (-not $subnets -or $subnets.Count -eq 0) { throw "No subnets found in VPC $VpcId." }
+    $publicSubnet = @($subnets | Where-Object { $_.Public })[0]
+    if (-not $publicSubnet) { $publicSubnet = $subnets[0] }
+    $subnetId = $publicSubnet.Id
+    $vpcId = $VpcId
+  } else {
+    Write-Host "Discovering default VPC and a public subnet..." -ForegroundColor Cyan
+    $vpcId = (& aws @profileArgs 'ec2' 'describe-vpcs' '--filters' 'Name=isDefault,Values=true' '--region' $AwsRegion '--query' 'Vpcs[0].VpcId' '--output' 'text')
+    $vpcId = (($vpcId | Out-String).Trim())
+    if (-not $vpcId -or $vpcId -eq 'None') { throw "No default VPC found in $AwsRegion. Provide explicit VPC/Subnet or create a VPC." }
 
-  $subnetsJson = & aws @profileArgs 'ec2' 'describe-subnets' '--filters' "Name=vpc-id,Values=$vpcId" '--region' $AwsRegion '--query' "Subnets[].{Id:SubnetId,Public:MapPublicIpOnLaunch}" '--output' 'json'
-  $subnets = $subnetsJson | ConvertFrom-Json
-  if (-not $subnets -or $subnets.Count -eq 0) { throw "No subnets found in VPC $vpcId." }
-  $publicSubnet = @($subnets | Where-Object { $_.Public })[0]
-  if (-not $publicSubnet) { $publicSubnet = $subnets[0] }
-  $subnetId = $publicSubnet.Id
+    $subnetsJson = & aws @profileArgs 'ec2' 'describe-subnets' '--filters' "Name=vpc-id,Values=$vpcId" '--region' $AwsRegion '--query' "Subnets[].{Id:SubnetId,Public:MapPublicIpOnLaunch}" '--output' 'json'
+    $subnets = $subnetsJson | ConvertFrom-Json
+    if (-not $subnets -or $subnets.Count -eq 0) { throw "No subnets found in VPC $vpcId." }
+    $publicSubnet = @($subnets | Where-Object { $_.Public })[0]
+    if (-not $publicSubnet) { $publicSubnet = $subnets[0] }
+    $subnetId = $publicSubnet.Id
+  }
 }
 Write-Host "VPC: $vpcId, Subnet: $subnetId" -ForegroundColor Yellow
 
@@ -100,7 +118,9 @@ Write-Host ("CFN Params: `n" + (
     "ArtifactKey=$ArtifactKey",
     "AwsRegion=$AwsRegion",
     "ImageId=$imageId",
-    "TopicEmail=$TopicEmail"
+    "TopicEmail=$TopicEmail",
+    "NotificationsProvider=$NotificationsProvider",
+    "FromEmail=$FromEmail"
   ) -join "`n"
 )) -ForegroundColor DarkGray
 
@@ -117,6 +137,8 @@ Write-Host ("CFN Params: `n" + (
   -AwsRegion $AwsRegion `
   -ImageId $imageId `
   -TopicEmail $TopicEmail `
+  -NotificationsProvider $NotificationsProvider `
+  -FromEmail $FromEmail `
   -Profile $Profile
 
 Write-Host "Done. Use the PublicURL output to test the API." -ForegroundColor Green

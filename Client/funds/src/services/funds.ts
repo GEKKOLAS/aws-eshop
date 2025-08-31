@@ -1,6 +1,7 @@
 import type { FundDto, BalanceDto, TransactionDto } from "@/dtos/funds";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "https://localhost:7236";
+// Use relative base by default so CloudFront can proxy /api/* and avoid mixed content
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {

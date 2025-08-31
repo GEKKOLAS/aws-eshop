@@ -8,8 +8,10 @@ param(
   [string]$KeyName = '',
   [string]$InstanceType = 't3.micro',
   [string]$AwsRegion = 'us-east-1',
-  [Parameter(Mandatory=$true)][string]$ImageId,
+  [string]$ImageId = '',
   [string]$TopicEmail = '',
+  [string]$NotificationsProvider = 'ses',
+  [string]$FromEmail = '',
   [string]$Profile = '',
   [string]$PreferredAz = ''
 )
@@ -206,6 +208,8 @@ $paramOverrides += "ArtifactKey=$ArtifactKey"
 $paramOverrides += "AwsRegion=$AwsRegion"
 $paramOverrides += "ImageId=$ImageId"
 if (-not [string]::IsNullOrWhiteSpace($TopicEmail)) { $paramOverrides += "TopicEmail=$TopicEmail" }
+if (-not [string]::IsNullOrWhiteSpace($NotificationsProvider)) { $paramOverrides += "NotificationsProvider=$NotificationsProvider" }
+if (-not [string]::IsNullOrWhiteSpace($FromEmail)) { $paramOverrides += "FromEmail=$FromEmail" }
 
 $awsArgs = @('cloudformation','deploy','--stack-name',$StackName,'--template-file',$template,'--region',$AwsRegion,'--capabilities','CAPABILITY_NAMED_IAM','--parameter-overrides') + $paramOverrides
 if (-not [string]::IsNullOrWhiteSpace($Profile)) { $awsArgs = @('--profile',$Profile) + $awsArgs }
